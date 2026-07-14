@@ -80,7 +80,10 @@ local lastStageUIUpdate = 0
 local lastStageUISignature
 local lastStatusSignature
 
-local updateProcessPanels
+local updateProcessPanels = function()
+    -- Inicialização temporária: alguns builds do Rayfield executam callbacks
+    -- durante a criação dos controles. A função real é atribuída mais abaixo.
+end
 
 -- ==================== Cache ====================
 
@@ -156,11 +159,34 @@ local processStats = {
 -- RAYFIELD
 -- =========================================================
 
-local rayfieldSuccess, Rayfield = pcall(function()
-    return loadstring(
-        game:HttpGet("https://sirius.menu/rayfield")
-    )()
-end)
+local rayfieldSuccess, Rayfield = xpcall(function()
+    local source = game:HttpGet(
+        "https://sirius.menu/rayfield",
+        true
+    )
+
+    assert(
+        type(source) == "string" and #source > 0,
+        "O código do Rayfield não foi recebido."
+    )
+
+    local loader, compileError = loadstring(source)
+
+    assert(
+        loader,
+        "Falha ao compilar o Rayfield: "
+            .. tostring(compileError)
+    )
+
+    local library = loader()
+
+    assert(
+        library,
+        "O Rayfield foi executado, mas não retornou a biblioteca."
+    )
+
+    return library
+end, debug.traceback)
 
 if not rayfieldSuccess or not Rayfield then
     warn("[NinMod] Não foi possível carregar o Rayfield.")
@@ -1279,44 +1305,121 @@ buildCollectibleCache()
 -- RAYFIELD WINDOW
 -- =========================================================
 
-local Window = Rayfield:CreateWindow({
-    Name = "NinMod | Boat Admin",
-    Icon = 0,
+local windowSuccess, Window = xpcall(function()
+    return Rayfield:CreateWindow({
+        Name = "NinMod | Boat Admin",
+        Icon = 0,
 
-    LoadingTitle = "NinMod",
-    LoadingSubtitle = "Boat Admin",
+        LoadingTitle = "NinMod",
+        LoadingSubtitle = "Boat Admin",
 
-    ShowText = "NinMod",
-    Theme = "Default",
+        ShowText = "NinMod",
+        Theme = "Default",
 
-    ToggleUIKeybind = Enum.KeyCode.G,
+        ToggleUIKeybind = "G",
 
-    DisableRayfieldPrompts = false,
-    DisableBuildWarnings = false,
+        DisableRayfieldPrompts = true,
+        DisableBuildWarnings = false,
 
-    ConfigurationSaving = {
-        Enabled = false,
-        FolderName = "NinMod",
-        FileName = "BoatAdmin"
-    },
+        ConfigurationSaving = {
+            Enabled = false,
+            FolderName = "NinMod",
+            FileName = "BoatAdmin"
+        },
 
-    Discord = {
-        Enabled = false,
-        Invite = "",
-        RememberJoins = false
-    },
+        Discord = {
+            Enabled = false,
+            Invite = "",
+            RememberJoins = false
+        },
 
-    KeySystem = false
-})
+        KeySystem = false
+    })
+end, debug.traceback)
+
+if not windowSuccess or not Window then
+    warn("[NinMod] A janela do Rayfield não foi criada.")
+    warn("[NinMod] Erro: " .. tostring(Window))
+    return
+end
+
+-- Evita que a falha de um único elemento interrompa a criação
+-- das abas e deixe a janela aberta, porém sem botões.
+local function wrapRayfieldTab(tab, tabName)
+    return setmetatable({}, {
+        __index = function(_, methodName)
+            local member = tab[methodName]
+
+            if type(member) ~= "function" then
+                return member
+            end
+
+            return function(_, ...)
+                local arguments = table.pack(...)
+
+                local success, result = xpcall(function()
+                    return member(
+                        tab,
+                        table.unpack(arguments, 1, arguments.n)
+                    )
+                end, debug.traceback)
+
+                if not success then
+                    registerError(
+                        string.format(
+                            "Falha ao criar elemento em %s (%s): %s",
+                            tostring(tabName),
+                            tostring(methodName),
+                            tostring(result)
+                        )
+                    )
+
+                    warn(
+                        "[NinMod | Rayfield | "
+                            .. tostring(tabName)
+                            .. "] "
+                            .. tostring(result)
+                    )
+
+                    return nil
+                end
+
+                return result
+            end
+        end
+    })
+end
+
+local function createTabSafe(tabName)
+    local success, tab = xpcall(function()
+        -- Ícone 0 evita incompatibilidade entre listas de ícones
+        -- de builds diferentes do Rayfield.
+        return Window:CreateTab(tabName, 0)
+    end, debug.traceback)
+
+    if not success or not tab then
+        warn(
+            "[NinMod] Falha ao criar a aba "
+                .. tostring(tabName)
+                .. ": "
+                .. tostring(tab)
+        )
+
+        return nil
+    end
+
+    return wrapRayfieldTab(tab, tabName)
+end
 
 -- =========================================================
 -- HOME TAB
 -- =========================================================
 
-local HomeTab = Window:CreateTab(
-    "Principal",
-    "house"
-)
+local HomeTab = createTabSafe("Principal")
+
+if not HomeTab then
+    return
+end
 
 HomeTab:CreateSection("Resumo do sistema")
 
@@ -1378,10 +1481,11 @@ HomeTab:CreateButton({
 -- FARM TAB
 -- =========================================================
 
-local FarmTab = Window:CreateTab(
-    "Farm",
-    "coins"
-)
+local FarmTab = createTabSafe("Farm")
+
+if not FarmTab then
+    return
+end
 
 FarmTab:CreateSection("AFK Gold Farm")
 
@@ -1479,10 +1583,11 @@ FarmTab:CreateButton({
 -- PROCESSES TAB
 -- =========================================================
 
-local ProcessesTab = Window:CreateTab(
-    "Processos",
-    "activity"
-)
+local ProcessesTab = createTabSafe("Processos")
+
+if not ProcessesTab then
+    return
+end
 
 ProcessesTab:CreateSection("Execução atual")
 
@@ -1682,10 +1787,11 @@ ProcessesTab:CreateButton({
 -- CHARACTER TAB
 -- =========================================================
 
-local CharacterTab = Window:CreateTab(
-    "Personagem",
-    "user"
-)
+local CharacterTab = createTabSafe("Personagem")
+
+if not CharacterTab then
+    return
+end
 
 CharacterTab:CreateSection("Recuperação")
 
@@ -1772,10 +1878,11 @@ CharacterTab:CreateToggle({
 -- SETTINGS TAB
 -- =========================================================
 
-local SettingsTab = Window:CreateTab(
-    "Configurações",
-    "settings"
-)
+local SettingsTab = createTabSafe("Configurações")
+
+if not SettingsTab then
+    return
+end
 
 SettingsTab:CreateSection("Aparência")
 
@@ -2339,8 +2446,11 @@ characterAddedConnection =
 updateDurationStatus()
 updateProcessPanels(true)
 
+markAction("Interface Rayfield carregada com todos os controles.")
+updateProcessPanels(true)
+
 notify(
     "NinMod carregado",
-    "Painel de processos e temas ativado.",
+    "Painel e controles do Rayfield ativados.",
     5
 )
